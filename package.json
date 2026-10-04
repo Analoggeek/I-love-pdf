@@ -13,7 +13,9 @@
     "typecheck": "tsc -b --pretty false",
     "worker:dev": "wrangler dev --config wrangler.toml",
     "build:bytehost": "npm run build && esbuild worker/index.ts --bundle --format=esm --platform=node --target=node20 --outfile=bytehost/worker.node.mjs && node scripts/package-bytehost.mjs",
-    "deploy": "npm run build && wrangler deploy --config wrangler.toml"
+    "cf:bootstrap": "node scripts/cloudflare-bootstrap.mjs",
+    "cf:migrate": "wrangler d1 migrations apply all-in-one-pdf-tools --remote --config wrangler.toml",
+    "deploy": "npm run build && npm run cf:bootstrap && npm run cf:migrate && wrangler deploy --config wrangler.toml"
   },
   "dependencies": {
     "jszip": "^3.10.1",

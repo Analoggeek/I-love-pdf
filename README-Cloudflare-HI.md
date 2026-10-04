@@ -1,82 +1,124 @@
 # GitHub + Cloudflare par deploy karne ki guide
 
-Is project ke liye **Cloudflare Workers + Assets** use karein. GitHub code rakhega; Cloudflare app, API aur static site host karega. Is route mein cPanel Node.js/PHP ki zaroorat nahi. Cloudflare deploy se pehle Cloudflare account, resources aur secrets set karne honge.
+Is project ke liye **Cloudflare Workers + Assets** use karein. GitHub code rakhega; Cloudflare app, API aur static site host karega. Is route mein cPanel Node.js/PHP ki zaroorat nahi.
 
-## 0. Gemini key ki safety
+> **Note:** is session ki branch `arena/01a10774-i-love-pdf` hai. Deploy automation usi mein add hui hai — pehle `main` mein merge karein, phir deploy hoga.
 
-- Chat mein pehle bheji gayi Gemini key ko **revoke** karke nayi key banayein. Purani key use na karein.
-- Gemini key, `SESSION_SECRET`, Cloudflare API token, `.env` ya `.dev.vars` ko GitHub repo mein kabhi upload na karein.
-- Nayi Gemini key Cloudflare Worker ke **Secret** mein hi set karein. `.gitignore` `.env`, `.dev.vars`, `node_modules/` aur build output ko ignore karta hai.
+## 0. Secrets ki safety (sabse pehle)
 
-## 1. GitHub repo taiyar karein
+- Gemini key ya Cloudflare API token **chat mein na bhejein**. Jo key pehle chat mein ja chuki hai use **revoke** karke nayi banayein.
+- API token, `SESSION_SECRET`, `GEMINI_API_KEY`, `.env`, `.dev.vars` — inme se kuch bhi GitHub repo mein commit na karein. `.gitignore` in sab ko ignore karta hai.
+- Sab secrets GitHub repo secrets ya Cloudflare Worker secrets mein rakhein.
+- Cloudflare API token ko **repo-wide secret** banayein, code/text file mein nahi.
 
-1. GitHub par **New repository** banayein; `Private` rakhna behtar hai.
-2. Is ZIP ko apne computer par extract karein. Repo mein ZIP file upload karne ke bajay extracted project files upload/push karein.
-3. Project ke root level par `package.json`, `package-lock.json`, `wrangler.toml`, `src/`, `worker/`, `db/`, `public/` aur `README-Cloudflare-HI.md` hone chahiye.
-4. `node_modules/`, `.env`, `.dev.vars`, aur Gemini key upload na karein. Cloudflare build `npm ci` se dependencies install karega.
+## 1. Sabse tez tareeka: GitHub Actions se auto-deploy (recommended)
 
-## 2. Cloudflare resources banayein
+Repo mein workflow pehle se hai: [`.github/workflows/deploy-cloudflare.yml`](.github/workflows/deploy-cloudflare.yml). Ye `main` par har push pe build karta hai, Cloudflare resources banata/reuse karta hai, D1 migrations lagata hai, Worker deploy karta hai aur health check chalata hai.
 
-Cloudflare Dashboard mein ya apne computer par Node.js 22+ ke saath Wrangler CLI se resources banayein. Wrangler CLI route:
+### 1.1 Cloudflare API token banayein
+
+Cloudflare Dashboard → **My Profile → API Tokens → Create Token → Custom token**:
+
+| Permission | Level |
+| --- | --- |
+| Workers Scripts | Edit |
+| D1 | Edit |
+| Workers R2 Storage | Edit |
+| Queues | Edit |
+| Account Settings | Read |
+
+Account ID Dashboard ke URL ya **Workers & Pages → Overview** se milta hai.
+
+### 1.2 GitHub repo secrets add karein
+
+GitHub → repo → **Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret | Zaroori? | Value |
+| --- | --- | --- |
+| `CLOUDFLARE_API_TOKEN` | Haan | Upar wala token |
+| `CLOUDFLARE_ACCOUNT_ID` | Haan | Cloudflare account id |
+| `SESSION_SECRET` | Haan (login/account ke liye) | Random 32+ character string, jaise `openssl rand -hex 32` |
+| `ADMIN_EMAIL` | Behtar | Aapka admin email |
+| `GEMINI_API_KEY` | Optional | AI features ke liye (nayi rotated key) |
+| `TURNSTILE_SECRET` | Optional | Bot protection ke liye |
+
+Optional: **Settings → Secrets and variables → Actions → Variables** mein `SITE_URL` (jaise `https://tools.example.com`) — isse sitemap/SEO tags sahi origin ke banenge.
+
+### 1.3 Deploy chalao
+
+1. Is branch ka PR `main` mein merge karein (ya direct `main` par push karein).
+2. GitHub → **Actions → Deploy to Cloudflare Workers** → run hone dein.
+3. Log ke aakhir mein live URL milega: `https://<worker-name>.<subdomain>.workers.dev`.
+4. `https://<worker-name>.<subdomain>.workers.dev/api/health` → `databaseConfigured`, `sessionConfigured`, `queueConfigured`, `storageConfigured` sab `true` hone chahiye.
+
+`SESSION_SECRET` GitHub secret set na ho to login/account features band rahenge — workflow warning dega.
+
+## 2. Manual (Wrangler CLI se) deploy
+
+Apne computer par Node.js 22+ ke saath:
 
 ```bash
-npm install -g wrangler
-npx wrangler login
-npx wrangler d1 create all-in-one-pdf-tools
-npx wrangler r2 bucket create all-in-one-pdf-tools-temporary
-npx wrangler queues create all-in-one-pdf-jobs
-npx wrangler queues create all-in-one-pdf-jobs-dlq
+npm install -g wrangler       # ya npx use karein
+npx wrangler login            # browser se Cloudflare authorize
+npm ci
+node scripts/cloudflare-bootstrap.mjs   # D1 + R2 + Queues banata/reuse karta hai, D1 id wrangler.toml mein likhta hai
 ```
 
-D1 command jo `database_id` de, use `wrangler.toml` mein `REPLACE_WITH_CLOUDFLARE_D1_DATABASE_ID` ki jagah paste karein. R2/Queue names config mein pehle se set hain. File save karke GitHub par commit/push karein.
+Bootstrap ke baad ek hi command se poora deploy:
 
-D1 tables banane ke liye project folder se migration chalayein:
+```bash
+npm run deploy
+# = npm run build && bootstrap && D1 migrations apply --remote && wrangler deploy
+```
+
+Pehli baar alag-alag chalana ho to:
 
 ```bash
 npx wrangler d1 migrations apply all-in-one-pdf-tools --remote --config wrangler.toml
+npx wrangler deploy --config wrangler.toml
 ```
 
-## 3. Gemini aur session secrets set karein
+`cloudflare-bootstrap.mjs` **idempotent** hai — dobara chalane par existing resources reuse hote hain, duplicate nahi bante.
 
-Secrets Cloudflare Worker settings mein set karein—GitHub build variables ya repo files mein nahi:
+Chhoti trick: `npm run deploy` se pehle `SITE_URL` set karein, jaise
+`SITE_URL=https://tools.example.com npm run deploy`.
 
-1. Cloudflare Dashboard → **Workers & Pages** → `all-in-one-pdf-tools` Worker → **Settings** → **Variables and Secrets**.
-2. `SESSION_SECRET` ko **Secret** ke roop mein add karein; random, kam-se-kam 32-character secret banayein.
-3. `GEMINI_API_KEY` mein **nayi rotated key** set karein.
-4. `ADMIN_EMAIL` mein apna admin email set karein (Worker secret/variable). Us email se account register karein.
+## 3. Worker secrets set karein
 
-Chahein to Wrangler CLI se bhi secrets set ho sakte hain:
+Cloudflare Dashboard → **Workers & Pages → all-in-one-pdf-tools → Settings → Variables and Secrets**:
+
+- `SESSION_SECRET` → **Secret**, 32+ random characters (isake bina account/privacy features `503` dete hain).
+- `ADMIN_EMAIL` → apna admin email; usi email se account register karein.
+- `GEMINI_API_KEY` → optional, AI features ke liye (nayi rotated key).
+- `TURNSTILE_SECRET` → optional.
+
+Wrangler se:
 
 ```bash
 npx wrangler secret put SESSION_SECRET --config wrangler.toml
-npx wrangler secret put GEMINI_API_KEY --config wrangler.toml
 npx wrangler secret put ADMIN_EMAIL --config wrangler.toml
+npx wrangler secret put GEMINI_API_KEY --config wrangler.toml
 ```
 
-CLI secret prompt par value paste karein; command line ke andar literal key na likhein.
+CLI prompt par value paste karein; command ke andar literal key na likhein.
 
-## 4. Cloudflare ko GitHub se connect karein
+## 4. Vercel/Nitro jaisa GitHub build (optional)
 
-Cloudflare Workers Builds GitHub repository se commit push hote hi build/deploy kar sakta hai. Dashboard mein:
+Cloudflare Workers Builds GitHub repo se bhi deploy kar sakta hai: **Workers & Pages → Worker → Settings → Builds → Connect**, production branch `main`, root `/`, build command `npm ci && npm run build`, deploy command `npx wrangler deploy --config wrangler.toml`.
 
-1. **Workers & Pages → Create application → Import a repository**.
-2. GitHub authorize karein, apna private repo aur production branch (`main`) select karein.
-3. Root directory `/`, Node.js version `22`, build command `npm ci && npm run build` set karein.
-4. Deploy command `npx wrangler deploy --config wrangler.toml` set karein.
-5. `SITE_URL` build variable mein apna final HTTPS origin dein, jaise `https://tools.example.com`.
-6. Save/Deploy karein. Pehle deploy par Cloudflare logs mein build/deploy success check karein.
+⚠️ GitHub Actions aur Workers Builds dono ek saath rakhne par **double deploy** hoga. Ek path chunein.
 
-Agar GitHub repo ko existing Worker se connect kar rahe hain: **Workers & Pages → Worker → Settings → Builds → Connect**. Worker ka naam `wrangler.toml` ke `name = "all-in-one-pdf-tools"` se match hona chahiye.
+## 5. Live URL aur test
 
-## 5. URL aur live test
-
-1. Pehle Cloudflare ka `workers.dev` URL kholkar test karein. Custom domain ke liye domain ko Cloudflare zone/DNS mein connect karein, phir Worker ke **Settings → Domains & Routes** mein domain add karein.
-2. `https://YOUR-WORKER-URL/api/health` kholen. `databaseConfigured`, `storageConfigured`, `queueConfigured` aur `sessionConfigured` `true` hone chahiye. Gemini secret sahi ho to `aiConfigured: true` aana chahiye.
-3. Home page aur `/merge-pdf` kholkar browser PDF tools test karein. AI feature ek chhote, non-sensitive prompt se test karein.
-4. Ads ko test karne ke liye consent dialog mein **Ads only** ya **Allow all** choose karein. Browser extension/ad blocker ya provider no-fill ki wajah se ad na dikhe to vendor/CSP network error check karein.
+1. Pehle `workers.dev` URL test karein. Custom domain ke liye domain Cloudflare zone/DNS mein hone chahiye, phir **Worker → Settings → Domains & Routes** mein add karein.
+2. `https://YOUR-WORKER-URL/api/health` — sab `configured` flags `true` check karein.
+3. Home aur `/merge-pdf` (ya `/merge-pdf/`) kholkar browser PDF tools test karein.
+4. Chhote, non-sensitive prompt se AI feature test karein.
+5. `robots.txt`, `sitemap.xml` aur (agar custom domain laga ho) canonical URLs verify karein.
+6. Ads: consent dialog mein **Ads only** ya **Allow all** choose karein; ad na aaye to browser extension/ad blocker ya provider no-fill/CSP check karein.
 
 ## Jo abhi bhi provider ke bina unavailable rahega
 
-- PDF ↔ Word/Excel/PowerPoint conversions ke liye alag genuine conversion provider configure karna hoga. Gemini key is conversion ko enable nahi karti.
-- Secure PDF protect/unlock/redaction, password reset email aur payments tab tak active nahi honge jab tak unke providers/integrations configure na hon.
-- GitHub code upload karne se deployment apne-aap complete nahi hota: D1 ID/migrations, R2/Queues bindings, Worker secrets aur successful Cloudflare build zaroori hain.
+- PDF ↔ Word/Excel/PowerPoint conversions ke liye alag genuine conversion provider (`CONVERSION_API_URL`, `CONVERSION_API_TOKEN`) chahiye. Gemini key is conversion ko enable nahi karti.
+- Secure PDF protect/unlock/redaction, password-reset email aur payments tab tak active nahi jab tak unke providers configure na hon.
+- GitHub par code push karne se deployment apne-aap complete nahi hota: D1 id/migrations, R2/Queues bindings, Worker secrets aur successful build zaroori hain.
