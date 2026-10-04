@@ -31,14 +31,14 @@ Account ID Dashboard ke URL ya **Workers & Pages → Overview** se milta hai.
 
 ### 1.2 GitHub repo secrets add karein
 
-GitHub → repo → **Settings → Secrets and variables → Actions → New repository secret**:
+GitHub → repo → **Settings → Secrets and variables → Actions → New repository secret**. Sirf pehla wala **zaroori** hai, baaki workflow khud sambhal leta hai:
 
 | Secret | Zaroori? | Value |
 | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | Haan | Upar wala token |
-| `CLOUDFLARE_ACCOUNT_ID` | Haan | Cloudflare account id |
-| `SESSION_SECRET` | Haan (login/account ke liye) | Random 32+ character string, jaise `openssl rand -hex 32` |
-| `ADMIN_EMAIL` | Behtar | Aapka admin email |
+| `CLOUDFLARE_API_TOKEN` | **Haan** | Upar wala token |
+| `CLOUDFLARE_ACCOUNT_ID` | Optional | Set na ho to workflow token se khud resolve karta hai (multi-account ho to set karein) |
+| `SESSION_SECRET` | Optional | Set na ho to pehli deploy par 32-byte random secret generate karke Worker par set ho jaata hai |
+| `ADMIN_EMAIL` | Optional | Default: repo owner ka email |
 | `GEMINI_API_KEY` | Optional | AI features ke liye (nayi rotated key) |
 | `TURNSTILE_SECRET` | Optional | Bot protection ke liye |
 
@@ -47,11 +47,12 @@ Optional: **Settings → Secrets and variables → Actions → Variables** mein 
 ### 1.3 Deploy chalao
 
 1. Is branch ka PR `main` mein merge karein (ya direct `main` par push karein).
-2. GitHub → **Actions → Deploy to Cloudflare Workers** → run hone dein.
-3. Log ke aakhir mein live URL milega: `https://<worker-name>.<subdomain>.workers.dev`.
-4. `https://<worker-name>.<subdomain>.workers.dev/api/health` → `databaseConfigured`, `sessionConfigured`, `queueConfigured`, `storageConfigured` sab `true` hone chahiye.
+2. GitHub → **Actions → Deploy to Cloudflare Workers** → run hone dein (ya `Run workflow` dabayein).
+3. Workflow ka kaam: token verify → resources (D1/R2/Queues) create/reuse → D1 migrations → build → deploy → Worker secrets → health check.
+4. Log ke aakhir mein aur **Summary** tab mein live URL milega: `https://<worker-name>.<subdomain>.workers.dev`.
+5. `https://<worker-name>.<subdomain>.workers.dev/api/health` → `databaseConfigured`, `sessionConfigured`, `queueConfigured`, `storageConfigured` sab `true` hone chahiye.
 
-`SESSION_SECRET` GitHub secret set na ho to login/account features band rahenge — workflow warning dega.
+`SESSION_SECRET` na dene par bhi account features chalu ho jaate hain (workflow generate karta hai). Uske baad SESSION_SECRET badalne par existing logins invalid ho jaate hain — isliye ek baar set karke rakhna behtar hai.
 
 ## 2. Manual (Wrangler CLI se) deploy
 
