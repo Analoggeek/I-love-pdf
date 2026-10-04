@@ -1,0 +1,142 @@
+name: Deploy to Cloudflare Workers
+
+# main par har push = build + Cloudflare resources + D1 migrations + deploy + health check.
+#
+# Zaroori GitHub repo secret (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN   — Cloudflare API token
+#       permissions: Workers Scripts: Edit, D1: Edit, Workers R2 Storage: Edit, Queues: Edit, Account Settings: Read
+# Optional:
+#   CLOUDFLARE_ACCOUNT_ID  — set na ho to workflow khud token se resolve kar leta hai
+#   SESSION_SECRET         — set na ho to workflow ek random secret generate karke Worker par set kar deta hai
+#   ADMIN_EMAIL            — default: repo owner ka email (neeche dekhein)
+#   GEMINI_API_KEY         — optional, AI features ke liye
+#   TURNSTILE_SECRET       — optional
+# Optional repo variable: SITE_URL (jaise https://tools.example.com)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: cloudflare-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
+      SITE_URL: ${{ vars.SITE_URL }}
+      WORKER_NAME: all-in-one-pdf-tools
+    steps:
+      - name: Token check
+        run: |
+          if [ -z "${CLOUDFLARE_API_TOKEN}" ]; then
+            echo "::error::GitHub secret CLOUDFLARE_API_TOKEN set nahi hai (Settings → Secrets and variables → Actions). Guide: README-Cloudflare-HI.md"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify Cloudflare token
+        run: |
+          set -uo pipefail
+          resp=$(curl -sS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" https://api.cloudflare.com/client/v4/user/tokens/verify || true)
+          echo "verify response: ${resp}"
+          status=$(printf '%s' "$resp" | jq -r '.result.status // empty' 2>/dev/null || true)
+          if [ "$status" != "active" ]; then
+            echo "::error::Cloudflare API token active nahi hai ya permissions adhuri hain. Token ka status/errors upar dekhein."
+            exit 1
+          fi
+          echo "✓ Cloudflare token active hai"
+
+      - name: Resolve Cloudflare account id (agar secret set na ho)
+        if: env.CLOUDFLARE_ACCOUNT_ID == ''
+        run: |
+          set -euo pipefail
+          accounts=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" https://api.cloudflare.com/client/v4/accounts)
+          count=$(printf '%s' "$accounts" | jq -r '.result | length')
+          id=$(printf '%s' "$accounts" | jq -r '.result[0].id // empty')
+          if [ -z "$id" ]; then
+            echo "::error::Token se koi Cloudflare account nahi mila. Token ko account-level permissions (D1/Workers/R2/Queues Edit) do."
+            exit 1
+          fi
+          if [ "$count" -gt 1 ]; then
+            echo "::warning::$count accounts mile; pehla use ho raha hai ($id). Sahi account ke liye CLOUDFLARE_ACCOUNT_ID secret set karein."
+          fi
+          echo "CLOUDFLARE_ACCOUNT_ID=$id" >> "$GITHUB_ENV"
+          echo "✓ account id resolved: $id"
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Create/reuse Cloudflare resources (D1, R2, Queues)
+        run: node scripts/cloudflare-bootstrap.mjs
+
+      - name: Apply D1 migrations
+        run: npx wrangler d1 migrations apply all-in-one-pdf-tools --remote --config wrangler.toml
+
+      - name: Deploy Worker
+        run: npx wrangler deploy --config wrangler.toml 2>&1 | tee deploy.log
+
+      - name: Ensure Worker secrets (generate SESSION_SECRET if missing)
+        run: |
+          set -uo pipefail
+          existing=$(npx wrangler secret list --config wrangler.toml 2>/dev/null || echo '[]')
+          has() { printf '%s' "$existing" | grep -q "\"$1\""; }
+          put() {
+            set +e
+            printf '%s' "$2" | npx wrangler secret put "$1" --config wrangler.toml > /dev/null 2>&1
+            rc=$?
+            set -e
+            if [ "$rc" = "0" ]; then echo "✓ Worker secret set: $1"; else echo "::warning::$1 set nahi ho paya (permission?)"; fi
+          }
+
+          if [ -n "${SESSION_SECRET}" ]; then
+            put SESSION_SECRET "${SESSION_SECRET}"
+          elif has SESSION_SECRET; then
+            echo "• SESSION_SECRET pehle se Worker par set hai — wahi use hoga (sessions stable)"
+          else
+            put SESSION_SECRET "$(openssl rand -hex 32)"
+          fi
+
+          put ADMIN_EMAIL "${ADMIN_EMAIL:-avinashgautam55908@gmail.com}"
+          if [ -n "${GEMINI_API_KEY}" ]; then put GEMINI_API_KEY "${GEMINI_API_KEY}"; fi
+          if [ -n "${TURNSTILE_SECRET}" ]; then put TURNSTILE_SECRET "${TURNSTILE_SECRET}"; fi
+
+      - name: Health check
+        run: |
+          set -uo pipefail
+          url=$(grep -Eo 'https://[a-zA-Z0-9._-]+\.workers\.dev' deploy.log | head -1 || true)
+          if [ -z "$url" ]; then
+            echo "::warning::Deploy URL log se nahi mila; Cloudflare dashboard → Workers & Pages mein URL dekho."
+            exit 0
+          fi
+          echo "### Live URL: $url" >> "$GITHUB_STEP_SUMMARY"
+          for i in 1 2 3 4 5; do
+            body=$(curl -fsS --max-time 15 "$url/api/health" || true)
+            if [ -n "$body" ]; then
+              echo "GET $url/api/health → $body"
+              echo '```json' >> "$GITHUB_STEP_SUMMARY"
+              printf '%s\n' "$body" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              break
+            fi
+            sleep 5
+          done
+          if [ -n "${SITE_URL:-}" ]; then echo "Custom domain: ${SITE_URL}"; fi
