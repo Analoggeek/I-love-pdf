@@ -1,0 +1,44 @@
+# Copy to wrangler.toml and replace the D1 ID and R2 bucket name after creating resources.
+name = "all-in-one-pdf-tools"
+main = "worker/index.ts"
+compatibility_date = "2026-10-04"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "all-in-one-pdf-tools"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "db/migrations"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "REPLACE_WITH_R2_BUCKET_NAME"
+
+[[queues.producers]]
+binding = "PDF_JOBS"
+queue = "all-in-one-pdf-jobs"
+
+[[queues.consumers]]
+queue = "all-in-one-pdf-jobs"
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 2
+dead_letter_queue = "all-in-one-pdf-jobs-dlq"
+
+[vars]
+GEMINI_MODEL = "gemini-2.5-flash"
+AI_GUEST_DAILY_LIMIT = "3"
+AI_USER_DAILY_LIMIT = "10"
+MAX_FILE_MB = "100"
+
+[triggers]
+crons = ["15 * * * *"]
+
+[observability]
+enabled = true

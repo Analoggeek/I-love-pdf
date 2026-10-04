@@ -1,0 +1,13 @@
+{
+  "name": "All in One PDF Tools",
+  "short_name": "PDF Tools",
+  "description": "Every PDF tool you need in one place.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fa",
+  "theme_color": "#f5f6f8",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

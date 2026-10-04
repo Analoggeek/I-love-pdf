@@ -1,0 +1,39 @@
+{
+  "name": "all-in-one-pdf-tools",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build && node scripts/prerender.mjs",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "tsc -b --pretty false",
+    "worker:dev": "wrangler dev --config wrangler.toml",
+    "build:bytehost": "npm run build && esbuild worker/index.ts --bundle --format=esm --platform=node --target=node20 --outfile=bytehost/worker.node.mjs && node scripts/package-bytehost.mjs",
+    "deploy": "npm run build && wrangler deploy --config wrangler.toml"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "lucide-react": "^0.468.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.18.4",
+    "sql.js": "^1.14.2",
+    "tesseract.js": "^6.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "archiver": "^8.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "~5.6.2",
+    "vite": "^6.4.3",
+    "wrangler": "^4.147.0"
+  }
+}
